@@ -32,6 +32,19 @@ export function UploadDropzone({
   const dismiss = useWorkspace((s) => s.dismissRejections);
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  // Files picked before the page finished loading (no onChange handler yet)
+  // would otherwise be silently ignored: pick them up once we're interactive.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (input?.files?.length) {
+      void send([...input.files]);
+      input.value = '';
+    }
+    setReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const send = async (files: File[]) => {
     const list = multiple ? files : files.slice(0, 1);
@@ -102,6 +115,7 @@ export function UploadDropzone({
           className="sr-only"
           tabIndex={-1}
           aria-label="Choose image files"
+          data-ready={ready || undefined}
           onChange={(e) => {
             void send([...(e.target.files ?? [])]);
             e.target.value = '';

@@ -29,7 +29,10 @@ export async function transparentLogo(name = 'logo.png'): Promise<FilePayload> {
 
 /** Upload through the visible file input of the dropzone. */
 export async function uploadFiles(page: Page, files: FilePayload[]) {
-  await page.getByLabel('Choose image files').first().setInputFiles(files);
+  const input = page.getByLabel('Choose image files').first();
+  // Wait until React is interactive so the change event is handled.
+  await expect(input).toHaveAttribute('data-ready', 'true');
+  await input.setInputFiles(files);
 }
 
 /** Fails the test if the page logs any error to the console. */

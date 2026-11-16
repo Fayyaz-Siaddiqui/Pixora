@@ -9,6 +9,16 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const rootEnv = path.join(repoRoot, '.env');
 if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
+// Optional proxy mode (e.g. website on Vercel, API on another machine):
+// the browser calls `/api/*` on the website's own domain and Next.js forwards
+// it to API_PROXY_TARGET. Same-origin requests keep the visitor cookie
+// first-party, so no shared parent domain is needed.
+const apiProxyTarget = process.env.API_PROXY_TARGET?.trim().replace(/\/+$/, '');
+if (apiProxyTarget) {
+  if (!/^https?:\/\//.test(apiProxyTarget)) throw new Error('API_PROXY_TARGET must start with http:// or https://');
+  process.env.NEXT_PUBLIC_API_URL = '';
+}
+
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Frame-Options', value: 'DENY' },
@@ -23,6 +33,9 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@app/shared', '@app/image-core'],
   turbopack: { root: repoRoot },
   outputFileTracingRoot: repoRoot,
+  async rewrites() {
+    return apiProxyTarget ? [{ source: '/api/:path*', destination: `${apiProxyTarget}/api/:path*` }] : [];
+  },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },
