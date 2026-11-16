@@ -1,0 +1,10 @@
+# This project lives inside XAMPP's htdocs folder but is NOT a PHP site.
+# It runs on Node.js (ports 3000 / 4000). Block Apache from serving any file
+# here, especially .env (secrets), storage/ (user uploads) and node_modules/.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

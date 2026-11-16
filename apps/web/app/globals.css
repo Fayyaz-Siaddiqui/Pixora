@@ -1,0 +1,103 @@
+@import 'tailwindcss';
+
+/* Dark mode is driven by the `.dark` class that next-themes sets on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Brand tokens. Ink-on-paper neutrals with a single vermilion accent. Every
+ * colour has a light and a dark value; components only use these tokens.
+ */
+:root {
+  --paper: #f7f6f3;
+  --surface: #ffffff;
+  --surface-2: #efede8;
+  --ink: #17181c;
+  --ink-muted: #5d5f66;
+  --line: #dedbd3;
+  --accent: #d9481f;
+  --accent-ink: #ffffff;
+  --accent-soft: #fbe6de;
+  --ok: #1f7a4d;
+  --ok-soft: #ddf1e6;
+  --bad: #b42318;
+  --bad-soft: #fde4e1;
+  --focus: #2c5bd8;
+}
+
+.dark {
+  --paper: #111214;
+  --surface: #18191c;
+  --surface-2: #212226;
+  --ink: #f1efea;
+  --ink-muted: #a3a29e;
+  --line: #2e2f34;
+  --accent: #ff6a3d;
+  --accent-ink: #1a0b05;
+  --accent-soft: #3a1d13;
+  --ok: #4cc488;
+  --ok-soft: #12301f;
+  --bad: #ff7a6e;
+  --bad-soft: #3b1714;
+  --focus: #7aa0ff;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-focus: var(--focus);
+
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display-face), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  --radius-ctl: 0.5rem;
+  --radius-card: 0.875rem;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Transparency grid behind images. */
+.checkerboard {
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, var(--surface-2) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--surface-2) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--surface-2) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--surface-2) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

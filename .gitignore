@@ -1,0 +1,30 @@
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Generated Prisma client
+packages/db/src/generated/
+
+# Local database data (npm run db:local), image storage and AI model weights
+.pgdata/
+storage/
+apps/ai-service/models/*
+!apps/ai-service/models/.gitkeep
+
+# Test output
+playwright-report/
+test-results/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,517 @@
+// Database schema for the image processing platform.
+// Image bytes are NEVER stored here, only metadata and storage references.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+  SUPERADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+enum StorageProvider {
+  LOCAL
+  S3
+}
+
+enum AssetKind {
+  ORIGINAL
+  RESULT
+  THUMBNAIL
+}
+
+enum JobType {
+  RESIZE
+  CROP
+  ROTATE
+  FLIP
+  COMPRESS
+  CONVERT
+  ENHANCE
+  SHARPEN
+  BLUR
+  BACKGROUND
+  PIPELINE
+  AI_UPSCALE
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum BatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum CreditReason {
+  GRANT
+  AI_JOB
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+enum AIProvider {
+  LOCAL_ONNX
+  EXTERNAL
+}
+
+enum AIDevice {
+  CPU
+  CUDA
+  DIRECTML
+  EXTERNAL
+}
+
+// ───────────────────────────── Accounts ─────────────────────────────
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  /// Always stored lowercased and trimmed.
+  email           String     @unique
+  /// Argon2id hash. Null for accounts that only use Google sign-in.
+  passwordHash    String?
+  name            String?
+  role            Role       @default(USER)
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  oauthAccounts   OAuthAccount[]
+  sessions        UserSession[]
+  authTokens      AuthToken[]
+  assets          ImageAsset[]
+  batches         ProcessingBatch[]
+  jobs            ProcessingJob[]
+  presets         ProcessingPreset[]
+  subscriptions   Subscription[]
+  payments        Payment[]
+  usage           UserUsage[]
+  creditLedger    CreditLedger[]
+  aiUsage         AIUsage[]
+  auditLogs       AuditLog[]       @relation("AuditActor")
+  settingsChanged AdminSetting[]   @relation("SettingUpdatedBy")
+
+  @@index([role])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OAuthAccount {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @db.Uuid
+  provider          String
+  providerAccountId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model UserSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  /// SHA-256 of the session token; the raw token only lives in the user's cookie.
+  tokenHash  String   @unique
+  userId     String   @db.Uuid
+  expiresAt  DateTime
+  ip         String?
+  userAgent  String?
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthToken {
+  id        String        @id @default(uuid()) @db.Uuid
+  userId    String        @db.Uuid
+  type      AuthTokenType
+  /// SHA-256 of the token sent by email.
+  tokenHash String        @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+// ───────────────────────────── Storage & images ─────────────────────────────
+
+model StorageObject {
+  id          String          @id @default(uuid()) @db.Uuid
+  provider    StorageProvider
+  bucket      String
+  /// Internal storage key. Never returned to clients.
+  key         String          @unique
+  contentType String
+  sizeBytes   BigInt
+  sha256      String
+  expiresAt   DateTime?
+  deletedAt   DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  asset ImageAsset?
+
+  @@index([expiresAt])
+  @@index([deletedAt])
+}
+
+model ImageAsset {
+  id              String     @id @default(uuid()) @db.Uuid
+  userId          String?    @db.Uuid
+  /// Signed anonymous-visitor id for guest uploads.
+  guestId         String?
+  kind            AssetKind
+  parentAssetId   String?    @db.Uuid
+  storageObjectId String     @unique @db.Uuid
+  originalName    String
+  format          String
+  width           Int
+  height          Int
+  hasAlpha        Boolean
+  colorSpace      String?
+  hasIccProfile   Boolean    @default(false)
+  exifOrientation Int?
+  sizeBytes       BigInt
+  expiresAt       DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  user          User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent        ImageAsset?    @relation("AssetDerivation", fields: [parentAssetId], references: [id], onDelete: SetNull)
+  derived       ImageAsset[]   @relation("AssetDerivation")
+  storageObject StorageObject  @relation(fields: [storageObjectId], references: [id], onDelete: Restrict)
+  inputJobs     ProcessingJob[]
+  resultOf      ProcessingResult?
+
+  @@index([userId, createdAt])
+  @@index([guestId])
+  @@index([parentAssetId])
+  @@index([expiresAt])
+}
+
+// ───────────────────────────── Processing ─────────────────────────────
+
+model ProcessingBatch {
+  id         String      @id @default(uuid()) @db.Uuid
+  userId     String?     @db.Uuid
+  guestId    String?
+  status     BatchStatus @default(PENDING)
+  totalCount Int
+  /// Common settings applied to every image in the batch (validated by zod).
+  settings   Json
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  user User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs ProcessingJob[]
+
+  @@index([userId, createdAt])
+  @@index([guestId])
+}
+
+model ProcessingJob {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String?   @db.Uuid
+  guestId      String?
+  batchId      String?   @db.Uuid
+  inputAssetId String    @db.Uuid
+  type         JobType
+  status       JobStatus @default(QUEUED)
+  /// Operation parameters (validated by zod before insert).
+  params       Json
+  progress     Int       @default(0)
+  priority     Int       @default(0)
+  attempts     Int       @default(0)
+  errorCode    String?
+  /// User-safe error text only; never stack traces or file paths.
+  errorMessage String?
+  queueJobId   String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user       User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batch      ProcessingBatch?  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  inputAsset ImageAsset        @relation(fields: [inputAssetId], references: [id], onDelete: Cascade)
+  result     ProcessingResult?
+  aiUsage    AIUsage?
+  credits    CreditLedger[]
+
+  @@index([userId, createdAt])
+  @@index([guestId])
+  @@index([status, createdAt])
+  @@index([batchId])
+  @@index([type])
+}
+
+model ProcessingResult {
+  id            String   @id @default(uuid()) @db.Uuid
+  jobId         String   @unique @db.Uuid
+  outputAssetId String   @unique @db.Uuid
+  width         Int
+  height        Int
+  format        String
+  sizeBytes     BigInt
+  durationMs    Int
+  /// Encoder outcome, e.g. { quality, targetMet, flattenedTransparency }.
+  details       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  job         ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  outputAsset ImageAsset    @relation(fields: [outputAssetId], references: [id], onDelete: Cascade)
+}
+
+model ProcessingPreset {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// Null = built-in system preset managed by admins.
+  userId    String?  @db.Uuid
+  name      String
+  category  String
+  params    Json
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([category])
+}
+
+// ───────────────────────────── Plans, billing, usage ─────────────────────────────
+
+model SubscriptionPlan {
+  id                   String   @id @default(uuid()) @db.Uuid
+  code                 String   @unique
+  name                 String
+  description          String?
+  priceMonthlyCents    Int      @default(0)
+  priceYearlyCents     Int      @default(0)
+  currency             String   @default("USD")
+  isActive             Boolean  @default(true)
+  sortOrder            Int      @default(0)
+  dailyJobLimit        Int
+  maxUploadBytes       BigInt
+  maxInputPixels       Int
+  maxBatchSize         Int
+  monthlyAiCredits     Int      @default(0)
+  storageQuotaBytes    BigInt
+  historyRetentionDays Int
+  /// Feature flags, e.g. { "aiUpscale": true, "batch": true, "api": false }.
+  features             Json
+  /// Price ids at the payment provider, keyed by interval.
+  providerPriceIds     Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                     String             @id @default(uuid()) @db.Uuid
+  userId                 String             @db.Uuid
+  planId                 String             @db.Uuid
+  status                 SubscriptionStatus
+  provider               String
+  providerSubscriptionId String?            @unique
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  cancelAtPeriodEnd      Boolean            @default(false)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([userId, status])
+  @@index([planId])
+}
+
+model Payment {
+  id                String        @id @default(uuid()) @db.Uuid
+  userId            String        @db.Uuid
+  subscriptionId    String?       @db.Uuid
+  amountCents       Int
+  currency          String
+  status            PaymentStatus
+  provider          String
+  providerPaymentId String        @unique
+  receiptUrl        String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([subscriptionId])
+}
+
+model UserUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @db.Uuid
+  date           DateTime @db.Date
+  jobsCount      Int      @default(0)
+  aiCreditsUsed  Int      @default(0)
+  bytesProcessed BigInt   @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+}
+
+model CreditLedger {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @db.Uuid
+  /// Positive = credits added, negative = credits spent.
+  delta     Int
+  reason    CreditReason
+  jobId     String?      @db.Uuid
+  note      String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  ProcessingJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([jobId])
+}
+
+// ───────────────────────────── AI ─────────────────────────────
+
+model AIModel {
+  id             String     @id @default(uuid()) @db.Uuid
+  key            String     @unique
+  name           String
+  provider       AIProvider
+  scales         Int[]
+  enabled        Boolean    @default(false)
+  license        String
+  maxInputPixels Int
+  creditCost     Int        @default(1)
+  config         Json?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  usage AIUsage[]
+}
+
+model AIUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  jobId          String   @unique @db.Uuid
+  userId         String?  @db.Uuid
+  modelId        String   @db.Uuid
+  scale          Int
+  inputPixels    Int
+  outputPixels   BigInt
+  device         AIDevice
+  durationMs     Int
+  creditsCharged Int      @default(0)
+  success        Boolean
+  errorCode      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  job   ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user  User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  model AIModel       @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([modelId, createdAt])
+}
+
+// ───────────────────────────── Administration ─────────────────────────────
+
+model AdminSetting {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  value       Json
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  updatedBy User? @relation("SettingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @db.Uuid
+  action     String
+  targetType String
+  targetId   String?
+  metadata   Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([action])
+  @@index([createdAt])
+}

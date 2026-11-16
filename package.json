@@ -1,0 +1,37 @@
+{
+  "name": "image-platform",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/web",
+    "apps/api"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev:api": "npm run dev -w @app/api",
+    "dev:web": "npm run dev -w @app/web",
+    "build": "npm run db:generate && npm run build -w @app/api && npm run build -w @app/web",
+    "start:api": "npm run start -w @app/api",
+    "start:web": "npm run start -w @app/web",
+    "typecheck": "npm run db:generate && npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts",
+    "db:local": "npm run local -w @app/db",
+    "db:generate": "npm run generate -w @app/db",
+    "db:migrate": "npm run migrate:dev -w @app/db",
+    "db:deploy": "npm run migrate:deploy -w @app/db",
+    "db:seed": "npm run seed -w @app/db",
+    "db:studio": "npm run studio -w @app/db",
+    "postinstall": "npm run db:generate"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
+  }
+}

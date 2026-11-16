@@ -1,0 +1,45 @@
+{
+  "name": "@app/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "node scripts/build.mjs",
+    "start": "node dist/server.js",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:worker": "node dist/worker.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@app/db": "*",
+    "@app/image-core": "*",
+    "@app/shared": "*",
+    "busboy": "1.6.0",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.6",
+    "exif-reader": "2.0.3",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.4",
+    "file-type": "22.3.0",
+    "helmet": "8.3.0",
+    "pg-boss": "12.38.2",
+    "pino": "10.4.0",
+    "pino-http": "11.0.0",
+    "sharp": "0.35.5",
+    "zip-stream": "7.0.5",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/busboy": "1.5.5",
+    "@types/cookie-parser": "1.4.10",
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/supertest": "7.2.1",
+    "@types/zip-stream": "7.0.0",
+    "esbuild": "0.28.2",
+    "pino-pretty": "13.2.0",
+    "supertest": "7.3.2"
+  }
+}
