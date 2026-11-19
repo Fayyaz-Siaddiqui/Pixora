@@ -70,7 +70,7 @@ await build({
 log('tracing dependencies...');
 const { fileList, warnings } = await nodeFileTrace([bundleFile], { base: repoRoot });
 // Expected: optional pg-native / pino-pretty, Cloudflare-only sockets, and sharp's packages for OTHER platforms.
-const expectedWarning = /Failed to resolve dependency "(pg-native|pino-pretty|cloudflare:sockets|@img\/)/;
+const expectedWarning = /Failed to resolve dependency "(pg-native|pino-pretty|supports-color|cloudflare:sockets|@img\/)/;
 for (const w of warnings) if (!expectedWarning.test(String(w.message))) log(`trace warning: ${w.message}`);
 
 // sharp loads its platform package with a computed require() that tracing can't follow.
