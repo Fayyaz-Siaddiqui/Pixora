@@ -51,7 +51,7 @@ const external = [
 ].filter((n) => !n.startsWith('@app/'));
 
 await rm(bundleDir, { recursive: true, force: true });
-await rm(path.join(apiDir, '.vercel'), { recursive: true, force: true });
+await rm(outputDir, { recursive: true, force: true }); // keep .vercel/project.json (CLI link)
 log('bundling src/vercel.ts...');
 await build({
   entryPoints: [path.join(apiDir, 'src', 'vercel.ts')],
