@@ -17,6 +17,13 @@ const apiProxyTarget = process.env.API_PROXY_TARGET?.trim().replace(/\/+$/, '');
 if (apiProxyTarget) {
   if (!/^https?:\/\//.test(apiProxyTarget)) throw new Error('API_PROXY_TARGET must start with http:// or https://');
   process.env.NEXT_PUBLIC_API_URL = '';
+} else if (process.env.VERCEL === '1' && !process.env.NEXT_PUBLIC_API_URL?.trim()) {
+  // Without this the site would silently call http://localhost:4000 (the visitor's
+  // own machine): uploads look like they work on the developer's PC but break for everyone.
+  throw new Error(
+    'API_PROXY_TARGET is not set. In Vercel: Settings → Environment Variables → add API_PROXY_TARGET ' +
+      '= your API URL (e.g. https://pixora-api.vercel.app) for the Production environment, then redeploy.',
+  );
 }
 
 const securityHeaders = [
