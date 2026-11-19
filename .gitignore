@@ -14,8 +14,8 @@ next-env.d.ts
 packages/db/src/generated/
 
 # Local database data (npm run db:local), image storage and AI model weights
-.pgdata/
-storage/
+/.pgdata/
+/storage/
 apps/ai-service/models/*
 !apps/ai-service/models/.gitkeep
 
