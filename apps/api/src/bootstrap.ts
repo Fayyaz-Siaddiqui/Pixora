@@ -4,6 +4,7 @@ import { imagingConfig, resolveStorageDir, type Env } from './config/env';
 import { startQueue } from './queues/queue';
 import { createInlineRunner, createQueueRunner, type JobRunner } from './queues/runner';
 import type { ImagingContext } from './services/context';
+import { configureDownloadLinks } from './services/download-links';
 import { LocalStorage } from './storage/local-storage';
 import type { StorageDriver } from './storage/storage';
 import { VercelBlobStorage } from './storage/vercel-blob-storage';
@@ -25,6 +26,7 @@ async function createStorage(env: Env): Promise<StorageDriver> {
 export async function createImagingContext(env: Env, logger: Logger, prisma?: PrismaClient): Promise<ImagingContext> {
   const db = prisma ?? createPrismaClient(env.DATABASE_URL);
   const config = imagingConfig(env);
+  configureDownloadLinks(config.signingSecret);
   const storage = await createStorage(env);
 
   const ctx: ImagingContext = { prisma: db, storage, boss: null, runner: undefined as unknown as JobRunner, config, logger };

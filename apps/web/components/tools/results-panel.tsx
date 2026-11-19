@@ -62,7 +62,7 @@ export function ResultsPanel({
           )}
         </h2>
         {batch && succeeded.length > 0 && state.phase === 'done' && (
-          <a href={fileUrl(batch.downloadUrl)} className={linkButtonClass('primary')}>
+          <a href={fileUrl(batch.downloadUrl)} className={linkButtonClass('primary')} download={`batch-${batch.id.slice(0, 8)}.zip`}>
             <FileArchive className="size-4" aria-hidden="true" /> Download all (ZIP)
           </a>
         )}
@@ -153,7 +153,7 @@ function JobRow({ job, input, onRetry, onCancel }: { job: Job; input?: Asset; on
           </Button>
         )}
         {r && (
-          <a href={fileUrl(r.asset.urls.download)} className={linkButtonClass('secondary')} download>
+          <a href={fileUrl(r.asset.urls.download)} className={linkButtonClass('secondary')} download={r.asset.name}>
             <Download className="size-4" aria-hidden="true" /> Download
           </a>
         )}

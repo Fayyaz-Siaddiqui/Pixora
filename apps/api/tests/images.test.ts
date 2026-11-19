@@ -331,6 +331,37 @@ describe('privacy, security and lifecycle', () => {
     expect(thumb.headers['content-type']).toBe('image/webp');
   });
 
+  it('download links end with the real file name and work without the cookie (download managers)', async () => {
+    const job = await runTool('convert', { assetId: ids['landscape.jpg'], output: { format: 'webp' } });
+    const url: string = job.result.asset.urls.download;
+    expect(url).toMatch(/^\/api\/files\/[0-9a-f-]{36}\/landscape-\d+x\d+\.webp\?exp=\d+&sig=[\w-]{32}$/);
+
+    // A download manager re-requests the link WITHOUT the browser's cookie.
+    const anon = t.newVisitor();
+    const dl = await download(anon, url);
+    expect(dl.status).toBe(200);
+    expect(dl.headers['content-type']).toBe('image/webp');
+    expect(dl.headers['content-disposition']).toMatch(/^attachment; filename="landscape-\d+x\d+\.webp"/);
+    expect((await sharp(dl.body).metadata()).format).toBe('webp');
+
+    // Tampered, re-targeted or expired links are refused.
+    const otherId = ids['portrait.png'] ?? ids['transparent.png'];
+    expect((await download(anon, url.replace(/sig=[\w-]+/, 'sig=' + 'A'.repeat(32)))).status).toBe(404);
+    expect((await download(anon, url.replace(/\/api\/files\/[0-9a-f-]{36}\//, `/api/files/${otherId}/`))).status).toBe(404);
+    const exp = Number(/exp=(\d+)/.exec(url)![1]);
+    expect((await download(anon, url.replace(`exp=${exp}`, `exp=${exp + 3600}`))).status).toBe(404);
+    expect((await download(anon, url.replace(`exp=${exp}`, 'exp=1000'))).status).toBe(404);
+  });
+
+  it('batch ZIP links are signed too', async () => {
+    const res = await visitor.post('/api/images/batch').set('Origin', WEB_ORIGIN).send({ assetIds: [ids['landscape.jpg']], operations: [{ type: 'resize', width: 50 }] });
+    const batch = await waitForBatch(visitor, res.body.batch.id);
+    expect(batch.downloadUrl).toMatch(/^\/api\/files\/batch\/[0-9a-f-]{36}\/batch-[0-9a-f]{8}\.zip\?exp=\d+&sig=/);
+    const zip = await download(t.newVisitor(), batch.downloadUrl);
+    expect(zip.status).toBe(200);
+    expect(zip.body.subarray(0, 2).toString()).toBe('PK');
+  });
+
   it('retry and cancel only apply to suitable jobs', async () => {
     const job = await runTool('resize', { assetId: ids['landscape.jpg'], options: { width: 20 } });
     expect((await visitor.post(`/api/jobs/${job.id}/retry`).set('Origin', WEB_ORIGIN)).status).toBe(409);

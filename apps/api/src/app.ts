@@ -13,6 +13,7 @@ import { identity } from './middleware/identity';
 import { originCheck } from './middleware/origin-check';
 import { healthRoutes } from './routes/health.routes';
 import { imageRoutes } from './routes/images.routes';
+import { fileRoutes } from './routes/files.routes';
 import { batchRoutes, jobRoutes } from './routes/jobs.routes';
 import { metaRoutes } from './routes/meta.routes';
 import type { ImagingContext } from './services/context';
@@ -117,6 +118,8 @@ export function createApp({ env, logger, dbCheck, version, imaging }: AppDeps): 
     app.use('/api', cookieParser(imaging.cookieSecret));
     const who = identity({ secureCookies: imaging.secureCookies });
     app.use('/api', metaRoutes(ctx));
+    // Signed download links: authorised by the signature, not the visitor cookie.
+    app.use('/api/files', fileRoutes(ctx));
     app.use('/api/images', who, imageRoutes(ctx));
     app.use('/api/jobs', who, jobRoutes(ctx));
     app.use('/api/batches', who, batchRoutes(ctx));

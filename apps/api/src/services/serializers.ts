@@ -1,4 +1,5 @@
 import type { ImageAsset, ProcessingBatch, ProcessingJob, ProcessingResult } from '@app/db';
+import { signedDownloadUrl } from './download-links';
 
 /** Public shape of an image. Never includes storage keys or file paths. */
 export function serializeAsset(a: ImageAsset) {
@@ -16,7 +17,8 @@ export function serializeAsset(a: ImageAsset) {
     expiresAt: a.expiresAt?.toISOString() ?? null,
     urls: {
       file: `/api/images/${a.id}/file`,
-      download: `/api/images/${a.id}/file?download=1`,
+      // Signed, ends with the real file name: works with download managers and without cookies.
+      download: signedDownloadUrl('image', a.id, a.originalName),
       thumbnail: `/api/images/${a.id}/thumbnail`,
     },
   };
@@ -74,7 +76,7 @@ export function serializeBatch(b: ProcessingBatch, jobs: JobWithRelations[]) {
     totalCount: b.totalCount,
     counts,
     createdAt: b.createdAt.toISOString(),
-    downloadUrl: `/api/batches/${b.id}/download`,
+    downloadUrl: signedDownloadUrl('batch', b.id, `batch-${b.id.slice(0, 8)}.zip`),
     jobs: jobs.map(serializeJob),
   };
 }
