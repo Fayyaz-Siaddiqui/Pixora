@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -116,20 +116,28 @@ async function receiveMultipart(req: Request, ctx: ImagingContext): Promise<{ fi
 }
 
 type Validated =
-  | { ok: true; file: Received; format: string; ext: string; width: number; height: number; hasAlpha: boolean; space: string | undefined; hasIcc: boolean; orientation: number | null; pages: number; thumbnail: Buffer; extensionMismatch: boolean }
+  | { ok: true; name: string; size: number; sha256: string; format: string; ext: string; width: number; height: number; hasAlpha: boolean; space: string | undefined; hasIcc: boolean; orientation: number | null; pages: number; thumbnail: Buffer; extensionMismatch: boolean }
   | { ok: false; rejection: UploadRejection };
 
-async function validateFile(file: Received, ctx: ImagingContext): Promise<Validated> {
-  const reject = (code: ErrorCode, message: string): Validated => ({ ok: false, rejection: { name: file.name, code, message } });
+function tooLarge(ctx: ImagingContext, name: string): Validated {
   const maxMb = (ctx.config.uploadMaxBytes / 1024 / 1024).toFixed(0);
+  return { ok: false, rejection: { name, code: ErrorCode.PAYLOAD_TOO_LARGE, message: `File is larger than the ${maxMb} MB limit.` } };
+}
 
-  if (file.truncated) return reject(ErrorCode.PAYLOAD_TOO_LARGE, `File is larger than the ${maxMb} MB limit.`);
-  if (file.size === 0) return reject(ErrorCode.BAD_REQUEST, 'File is empty.');
-
+async function validateFile(file: Received, ctx: ImagingContext): Promise<Validated> {
+  if (file.truncated) return tooLarge(ctx, file.name);
+  if (file.size === 0) return { ok: false, rejection: { name: file.name, code: ErrorCode.BAD_REQUEST, message: 'File is empty.' } };
   // Inspect the file from memory, never by path: libvips keeps files it opened
   // (e.g. memory-mapped WebP) locked, and on Windows a locked temp file cannot
   // then be moved into storage (EBUSY). The size is already capped by the upload limit.
-  const data = await readFile(file.tmpPath);
+  return validateBuffer(file.name, await readFile(file.tmpPath), ctx);
+}
+
+/** Validate image bytes: real format from content, decompression-bomb guard, full decode + thumbnail. */
+async function validateBuffer(name: string, data: Buffer, ctx: ImagingContext): Promise<Validated> {
+  const reject = (code: ErrorCode, message: string): Validated => ({ ok: false, rejection: { name, code, message } });
+  if (data.length === 0) return reject(ErrorCode.BAD_REQUEST, 'File is empty.');
+  if (data.length > ctx.config.uploadMaxBytes) return tooLarge(ctx, name);
 
   const detected = await fileTypeFromBuffer(data).catch(() => undefined);
   const allowed = detected ? ALLOWED_INPUT[detected.mime] : undefined;
@@ -170,12 +178,14 @@ async function validateFile(file: Received, ctx: ImagingContext): Promise<Valida
     return reject(ErrorCode.CORRUPT_IMAGE, 'The image file appears to be damaged or incomplete.');
   }
 
-  const declaredExt = path.extname(file.name).slice(1).toLowerCase();
+  const declaredExt = path.extname(name).slice(1).toLowerCase();
   const extensionMismatch = declaredExt !== '' && EXT_ALIASES[declaredExt] !== allowed.format;
 
   return {
     ok: true,
-    file,
+    name,
+    size: data.length,
+    sha256: createHash('sha256').update(data).digest('hex'),
     format: allowed.format,
     ext: allowed.ext,
     // Stored dimensions are as displayed (EXIF orientation applied), matching what processing produces.
@@ -210,8 +220,6 @@ export async function handleUpload(
     throw new HttpError(400, ErrorCode.BAD_REQUEST, 'No files were received. Use a field named "files".');
   }
 
-  const expiresAt = new Date(Date.now() + ctx.config.retentionMs);
-
   // Validate one at a time to bound memory use.
   for (const file of files) {
     let v: Validated;
@@ -227,68 +235,157 @@ export async function handleUpload(
       continue;
     }
 
-    const assetId = randomUUID();
-    const thumbId = randomUUID();
-    const originalKey = storageKey('originals', assetId, v.ext);
-    const thumbKey = storageKey('thumbs', thumbId, 'webp');
-    const mime = Object.entries(ALLOWED_INPUT).find(([, x]) => x.format === v.format)![0];
-
-    try {
-      await ctx.storage.putFile(originalKey, file.tmpPath, mime);
-      await ctx.storage.putBuffer(thumbKey, v.thumbnail, 'image/webp');
-      const asset = await ctx.prisma.$transaction(async (tx) => {
-        const so = await tx.storageObject.create({
-          data: { provider: ctx.storage.provider, bucket: ctx.storage.bucket, key: originalKey, contentType: mime, sizeBytes: BigInt(file.size), sha256: file.sha256, expiresAt },
-        });
-        const a = await tx.imageAsset.create({
-          data: {
-            id: assetId,
-            userId: owner.userId,
-            guestId: owner.userId ? null : owner.guestId,
-            kind: 'ORIGINAL',
-            storageObjectId: so.id,
-            originalName: file.name,
-            format: v.format,
-            width: v.width,
-            height: v.height,
-            hasAlpha: v.hasAlpha,
-            colorSpace: v.space ?? null,
-            hasIccProfile: v.hasIcc,
-            exifOrientation: v.orientation,
-            sizeBytes: BigInt(file.size),
-            expiresAt,
-          },
-        });
-        const tso = await tx.storageObject.create({
-          data: { provider: ctx.storage.provider, bucket: ctx.storage.bucket, key: thumbKey, contentType: 'image/webp', sizeBytes: BigInt(v.thumbnail.length), sha256: createHash('sha256').update(v.thumbnail).digest('hex'), expiresAt },
-        });
-        const meta = await sharp(v.thumbnail).metadata();
-        await tx.imageAsset.create({
-          data: {
-            id: thumbId,
-            userId: owner.userId,
-            guestId: owner.userId ? null : owner.guestId,
-            kind: 'THUMBNAIL',
-            parentAssetId: assetId,
-            storageObjectId: tso.id,
-            originalName: `thumb-${file.name}`,
-            format: 'webp',
-            width: meta.width,
-            height: meta.height,
-            hasAlpha: Boolean(meta.hasAlpha),
-            sizeBytes: BigInt(v.thumbnail.length),
-            expiresAt,
-          },
-        });
-        return a;
-      });
-      uploaded.push({ ...serializeAsset(asset), extensionMismatch: v.extensionMismatch, pages: v.pages });
-    } catch (err) {
-      ctx.logger.error({ err }, 'failed to store upload');
-      await Promise.all([ctx.storage.delete(originalKey).catch(() => {}), ctx.storage.delete(thumbKey).catch(() => {}), unlink(file.tmpPath).catch(() => {})]);
-      rejected.push({ name: file.name, code: ErrorCode.STORAGE_ERROR, message: 'The file could not be saved. Please try again.' });
+    const stored = await persistValidated(ctx, owner, v, (key, mime) => ctx.storage.putFile(key, file.tmpPath, mime));
+    if (stored.ok) uploaded.push(stored.file);
+    else {
+      await unlink(file.tmpPath).catch(() => {});
+      rejected.push(stored.rejection);
     }
   }
 
+  return { uploaded, rejected };
+}
+
+const MIME_BY_FORMAT = Object.fromEntries(Object.entries(ALLOWED_INPUT).map(([mime, x]) => [x.format, mime]));
+
+/**
+ * Store a validated original (via `storeOriginal`, or already stored at
+ * `existingKey`), its thumbnail, and the database rows. On failure every
+ * stored object is removed again.
+ */
+async function persistValidated(
+  ctx: ImagingContext,
+  owner: Owner,
+  v: Extract<Validated, { ok: true }>,
+  storeOriginal: ((key: string, mime: string) => Promise<void>) | null,
+  existingKey?: string,
+): Promise<{ ok: true; file: UploadedFile } | { ok: false; rejection: UploadRejection }> {
+  const expiresAt = new Date(Date.now() + ctx.config.retentionMs);
+  const assetId = randomUUID();
+  const thumbId = randomUUID();
+  const originalKey = existingKey ?? storageKey('originals', assetId, v.ext);
+  const thumbKey = storageKey('thumbs', thumbId, 'webp');
+  const mime = MIME_BY_FORMAT[v.format]!;
+
+  try {
+    if (storeOriginal) await storeOriginal(originalKey, mime);
+    await ctx.storage.putBuffer(thumbKey, v.thumbnail, 'image/webp');
+    const thumbMeta = await sharp(v.thumbnail).metadata();
+    const asset = await ctx.prisma.$transaction(async (tx) => {
+      const so = await tx.storageObject.create({
+        data: { provider: ctx.storage.provider, bucket: ctx.storage.bucket, key: originalKey, contentType: mime, sizeBytes: BigInt(v.size), sha256: v.sha256, expiresAt },
+      });
+      const a = await tx.imageAsset.create({
+        data: {
+          id: assetId,
+          userId: owner.userId,
+          guestId: owner.userId ? null : owner.guestId,
+          kind: 'ORIGINAL',
+          storageObjectId: so.id,
+          originalName: v.name,
+          format: v.format,
+          width: v.width,
+          height: v.height,
+          hasAlpha: v.hasAlpha,
+          colorSpace: v.space ?? null,
+          hasIccProfile: v.hasIcc,
+          exifOrientation: v.orientation,
+          sizeBytes: BigInt(v.size),
+          expiresAt,
+        },
+      });
+      const tso = await tx.storageObject.create({
+        data: { provider: ctx.storage.provider, bucket: ctx.storage.bucket, key: thumbKey, contentType: 'image/webp', sizeBytes: BigInt(v.thumbnail.length), sha256: createHash('sha256').update(v.thumbnail).digest('hex'), expiresAt },
+      });
+      await tx.imageAsset.create({
+        data: {
+          id: thumbId,
+          userId: owner.userId,
+          guestId: owner.userId ? null : owner.guestId,
+          kind: 'THUMBNAIL',
+          parentAssetId: assetId,
+          storageObjectId: tso.id,
+          originalName: `thumb-${v.name}`,
+          format: 'webp',
+          width: thumbMeta.width,
+          height: thumbMeta.height,
+          hasAlpha: Boolean(thumbMeta.hasAlpha),
+          sizeBytes: BigInt(v.thumbnail.length),
+          expiresAt,
+        },
+      });
+      return a;
+    });
+    return { ok: true, file: { ...serializeAsset(asset), extensionMismatch: v.extensionMismatch, pages: v.pages } };
+  } catch (err) {
+    ctx.logger.error({ err }, 'failed to store upload');
+    await Promise.all([ctx.storage.delete(originalKey).catch(() => {}), ctx.storage.delete(thumbKey).catch(() => {})]);
+    return { ok: false, rejection: { name: v.name, code: ErrorCode.STORAGE_ERROR, message: 'The file could not be saved. Please try again.' } };
+  }
+}
+
+// ───────── Direct uploads (browser → storage, e.g. Vercel Blob) ─────────
+
+/** Folder for files a visitor uploaded directly but has not registered yet. */
+export const INCOMING_PREFIX = 'incoming/';
+
+/**
+ * A stable, unguessable folder name per visitor, derived from their identity
+ * with an HMAC. Upload tokens are only issued for paths inside it, and only
+ * files inside it can be registered, so nobody can claim another visitor's upload.
+ */
+export function ownerUploadPrefix(ctx: ImagingContext, owner: Owner): string {
+  const who = owner.userId ? `u:${owner.userId}` : `g:${owner.guestId}`;
+  const tag = createHmac('sha256', ctx.config.signingSecret).update(`direct-upload:${who}`).digest('base64url').slice(0, 24);
+  return `${INCOMING_PREFIX}${tag}/`;
+}
+
+const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** True when `key` is a direct-upload path that belongs to `owner`. */
+export function isOwnDirectUploadKey(ctx: ImagingContext, owner: Owner, key: string): boolean {
+  const prefix = ownerUploadPrefix(ctx, owner);
+  return key.startsWith(prefix) && UPLOAD_ID.test(key.slice(prefix.length));
+}
+
+/**
+ * Register files the browser uploaded directly to storage. Each file is
+ * validated exactly like a classic upload; rejected files are deleted.
+ */
+export async function registerDirectUploads(
+  ctx: ImagingContext,
+  owner: Owner,
+  files: { key: string; name: string }[],
+): Promise<{ uploaded: UploadedFile[]; rejected: UploadRejection[] }> {
+  const uploaded: UploadedFile[] = [];
+  const rejected: UploadRejection[] = [];
+
+  for (const f of files) {
+    const name = safeFileName(f.name);
+    if (!isOwnDirectUploadKey(ctx, owner, f.key)) {
+      rejected.push({ name, code: ErrorCode.FORBIDDEN, message: 'This upload does not belong to you.' });
+      continue;
+    }
+    if (await ctx.prisma.storageObject.findFirst({ where: { key: f.key }, select: { id: true } })) {
+      rejected.push({ name, code: ErrorCode.CONFLICT, message: 'This file was already added.' });
+      continue;
+    }
+
+    let v: Validated;
+    try {
+      v = await validateBuffer(name, await ctx.storage.getBuffer(f.key), ctx);
+    } catch (err) {
+      ctx.logger.warn({ err }, 'direct upload could not be read');
+      v = { ok: false, rejection: { name, code: ErrorCode.BAD_REQUEST, message: 'The upload was not found or is incomplete. Please try again.' } };
+    }
+    if (!v.ok) {
+      rejected.push(v.rejection);
+      await ctx.storage.delete(f.key).catch(() => {});
+      continue;
+    }
+    const stored = await persistValidated(ctx, owner, v, null, f.key);
+    if (stored.ok) uploaded.push(stored.file);
+    else rejected.push(stored.rejection);
+  }
   return { uploaded, rejected };
 }

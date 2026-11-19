@@ -33,6 +33,7 @@ enum AuthTokenType {
 enum StorageProvider {
   LOCAL
   S3
+  VERCEL_BLOB
 }
 
 enum AssetKind {

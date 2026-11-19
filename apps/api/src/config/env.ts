@@ -50,7 +50,10 @@ const envSchema = z.object({
     .refine((v) => !v.startsWith('replace-with'), 'COOKIE_SECRET is still the placeholder from .env.example; generate a random one'),
 
   // Storage
-  STORAGE_DRIVER: z.enum(['local']).default('local'),
+  /** local: files on this machine's disk. vercel-blob: private Vercel Blob store (serverless hosting). */
+  STORAGE_DRIVER: z.enum(['local', 'vercel-blob']).default('local'),
+  /** Read-write token of the Vercel Blob store (set automatically when a store is connected to a Vercel project). */
+  BLOB_READ_WRITE_TOKEN: z.string().optional(),
   /** Relative paths are resolved from the repository root. */
   STORAGE_LOCAL_DIR: z.string().default('storage'),
   FILE_RETENTION_HOURS: z.coerce.number().min(0.1).max(24 * 365).default(24),
@@ -65,11 +68,23 @@ const envSchema = z.object({
   GUEST_DAILY_JOB_LIMIT: z.coerce.number().int().min(1).default(200),
 
   // Worker
-  /** Run the image worker inside the API process (convenient for development). */
+  /**
+   * queue: jobs go through the PostgreSQL queue (pg-boss) and a long-running worker.
+   * inline: jobs run inside the API request lifecycle (serverless hosting such as Vercel).
+   */
+  JOB_RUNNER: z.enum(['queue', 'inline']).default('queue'),
+  /** Run the image worker inside the API process (queue mode; convenient for development). */
   WORKER_EMBEDDED: bool.default(true),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(2),
   WORKER_POLL_SECONDS: z.coerce.number().min(0.5).max(60).default(1),
   JOB_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(3600).default(120),
+
+  /** Protects the scheduled cleanup endpoint (Vercel sends it as "Authorization: Bearer <secret>"). */
+  CRON_SECRET: z.string().min(16, 'CRON_SECRET must be at least 16 characters').optional(),
+}).superRefine((env, ctx) => {
+  if (env.STORAGE_DRIVER === 'vercel-blob' && !env.BLOB_READ_WRITE_TOKEN) {
+    ctx.addIssue({ code: 'custom', path: ['BLOB_READ_WRITE_TOKEN'], message: 'is required when STORAGE_DRIVER=vercel-blob (connect a Blob store to the project)' });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -97,6 +112,8 @@ export interface ImagingConfig {
   jobTimeoutSeconds: number;
   workerConcurrency: number;
   workerPollSeconds: number;
+  /** Signs direct-upload paths so a visitor can only register files it uploaded itself. */
+  signingSecret: string;
 }
 
 export function imagingConfig(env: Env): ImagingConfig {
@@ -112,6 +129,7 @@ export function imagingConfig(env: Env): ImagingConfig {
     jobTimeoutSeconds: env.JOB_TIMEOUT_SECONDS,
     workerConcurrency: env.WORKER_CONCURRENCY,
     workerPollSeconds: env.WORKER_POLL_SECONDS,
+    signingSecret: env.COOKIE_SECRET,
   };
 }
 

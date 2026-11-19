@@ -38,7 +38,7 @@ export async function createTestApp(overrides: Record<string, string> = {}) {
     dbCheck: async () => {
       await ctx.prisma.$queryRaw`SELECT 1`;
     },
-    imaging: { ctx, cookieSecret: env.COOKIE_SECRET, secureCookies: false },
+    imaging: { ctx, cookieSecret: env.COOKIE_SECRET, secureCookies: false, cronSecret: env.CRON_SECRET },
   });
   return {
     app,

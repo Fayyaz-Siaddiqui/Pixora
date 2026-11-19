@@ -5,12 +5,13 @@ import type { Readable } from 'node:stream';
  * "originals/2026/11/<uuid>.jpg") and are NEVER exposed to clients; the API
  * always serves files through authorised routes.
  *
- * Implementations: LocalStorage (development / single server). An
- * S3-compatible driver (AWS S3, Cloudflare R2, MinIO) is added in the
- * deployment phase behind this same interface.
+ * Implementations: LocalStorage (development / single server) and
+ * VercelBlobStorage (private Vercel Blob store, for serverless hosting).
  */
 export interface StorageDriver {
-  readonly provider: 'LOCAL' | 'S3';
+  readonly provider: 'LOCAL' | 'S3' | 'VERCEL_BLOB';
+  /** True when browsers upload straight to the store (see the upload-token route). */
+  readonly directUploads: boolean;
   readonly bucket: string;
   /** Directory for in-progress uploads (always local disk). */
   readonly tempDir: string;
@@ -21,6 +22,8 @@ export interface StorageDriver {
   createReadStream(key: string): Promise<Readable>;
   delete(key: string): Promise<void>;
   exists(key: string): Promise<boolean>;
+  /** Keys under `prefix` last written before `before` (used to remove abandoned direct uploads). */
+  listOlderThan?(prefix: string, before: Date): Promise<string[]>;
 }
 
 export class StorageError extends Error {

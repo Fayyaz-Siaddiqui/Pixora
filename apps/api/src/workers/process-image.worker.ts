@@ -145,6 +145,7 @@ export async function processImageJob(ctx: ImagingContext, jobId: string): Promi
 
 /** Start consuming the image queue in this process. */
 export async function startImageWorker(ctx: ImagingContext): Promise<void> {
+  if (!ctx.boss) throw new Error('startImageWorker needs queue mode (JOB_RUNNER=queue).');
   await ctx.boss.work<ProcessImagePayload>(
     QUEUES.processImage,
     {

@@ -84,7 +84,8 @@ export interface PublicConfig {
   outputFormats: FormatInfo[];
   resampling: string[];
   sizePresets: SizePreset[];
-  features: { aiUpscale: boolean };
+  /** directUploads: files go from the browser straight to cloud storage (Vercel Blob). */
+  features: { aiUpscale: boolean; directUploads?: boolean };
 }
 
 export interface MetadataReport {

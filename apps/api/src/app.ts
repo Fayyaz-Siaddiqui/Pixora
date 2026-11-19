@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express, { type Express } from 'express';
@@ -17,6 +17,7 @@ import { batchRoutes, jobRoutes } from './routes/jobs.routes';
 import { metaRoutes } from './routes/meta.routes';
 import type { ImagingContext } from './services/context';
 import type { DatabaseCheck } from './services/health.service';
+import { runCleanup } from './workers/cleanup.worker';
 
 export interface AppDeps {
   env: Pick<Env, 'WEB_ORIGIN' | 'RATE_LIMIT_PER_MINUTE' | 'TRUST_PROXY'>;
@@ -28,6 +29,8 @@ export interface AppDeps {
     ctx: ImagingContext;
     cookieSecret: string;
     secureCookies: boolean;
+    /** Enables GET /api/cron/cleanup, authorised with "Authorization: Bearer <secret>" (Vercel Cron). */
+    cronSecret?: string;
   };
 }
 
@@ -95,6 +98,19 @@ export function createApp({ env, logger, dbCheck, version, imaging }: AppDeps): 
   app.use(express.json({ limit: '100kb' }));
 
   app.use('/api/health', healthRoutes(dbCheck, version));
+
+  const cronSecret = imaging?.cronSecret;
+  if (imaging && cronSecret) {
+    const digest = (v: string) => createHash('sha256').update(v).digest();
+    const expected = digest(`Bearer ${cronSecret}`);
+    app.get('/api/cron/cleanup', async (req, res) => {
+      if (!timingSafeEqual(digest(req.get('authorization') ?? ''), expected)) {
+        res.status(401).json({ error: { code: ErrorCode.UNAUTHENTICATED, message: 'Not authorised.', requestId: String(req.id) } });
+        return;
+      }
+      res.set('Cache-Control', 'no-store').json({ ok: true, removed: await runCleanup(imaging.ctx) });
+    });
+  }
 
   if (imaging) {
     const { ctx } = imaging;

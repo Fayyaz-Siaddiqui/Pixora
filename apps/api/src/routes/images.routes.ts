@@ -1,3 +1,4 @@
+import { handleUpload as handleBlobUpload, type HandleUploadBody } from '@vercel/blob/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import type { JobType } from '@app/db';
@@ -30,7 +31,9 @@ import {
 import type { ImagingContext } from '../services/context';
 import { createBatch, createJob, looseOutputSchema } from '../services/job.service';
 import { serializeAsset, serializeBatch, serializeJob } from '../services/serializers';
-import { handleUpload } from '../services/upload.service';
+import { handleUpload, isOwnDirectUploadKey, ownerUploadPrefix, registerDirectUploads } from '../services/upload.service';
+import { VercelBlobStorage } from '../storage/vercel-blob-storage';
+import { maybeRunCleanup } from '../workers/cleanup.worker';
 
 const assetId = z.string().uuid('assetId must be an image id');
 
@@ -102,6 +105,61 @@ export function imageRoutes(ctx: ImagingContext): Router {
     const result = await handleUpload(req, requireOwner(req), ctx);
     const status = result.uploaded.length > 0 ? 201 : 422;
     res.status(status).json(result);
+  });
+
+  // ── Direct uploads: the browser sends files straight to the store, then registers them here. ──
+
+  /** Where this visitor may upload directly (404 when the store doesn't support direct uploads). */
+  router.get('/direct-upload', (req, res) => {
+    if (!ctx.storage.directUploads) throw new HttpError(404, ErrorCode.NOT_FOUND, 'Direct uploads are not enabled.');
+    res.set('Cache-Control', 'no-store').json({
+      prefix: ownerUploadPrefix(ctx, requireOwner(req)),
+      tokenUrl: '/api/images/upload-token',
+      maxBytes: ctx.config.uploadMaxBytes,
+      maxFiles: ctx.config.uploadMaxFiles,
+    });
+  });
+
+  /** Issues a short-lived Vercel Blob client token for ONE path inside the visitor's own folder. */
+  router.post('/upload-token', async (req, res) => {
+    const storage = ctx.storage;
+    if (!(storage instanceof VercelBlobStorage)) throw new HttpError(404, ErrorCode.NOT_FOUND, 'Direct uploads are not enabled.');
+    const owner = requireOwner(req);
+    const body = req.body as HandleUploadBody;
+    // Only token requests are accepted; we don't use upload-completed callbacks.
+    if (body?.type !== 'blob.generate-client-token') throw new HttpError(400, ErrorCode.BAD_REQUEST, 'Unsupported upload request.');
+    const json = await handleBlobUpload({
+      body,
+      request: req,
+      token: storage.token,
+      onBeforeGenerateToken: async (pathname) => {
+        if (!isOwnDirectUploadKey(ctx, owner, pathname)) throw new HttpError(403, ErrorCode.FORBIDDEN, 'Upload path not allowed.');
+        return {
+          maximumSizeInBytes: ctx.config.uploadMaxBytes,
+          // The real format is checked from the file's bytes on registration; browsers send '' for some types.
+          allowedContentTypes: ['image/*', 'application/octet-stream'],
+          addRandomSuffix: false,
+          allowOverwrite: false,
+          validUntil: Date.now() + 10 * 60_000,
+        };
+      },
+    }).catch((err: unknown) => {
+      if (err instanceof HttpError) throw err;
+      ctx.logger.error({ err }, 'upload token failed');
+      throw new HttpError(502, ErrorCode.STORAGE_ERROR, 'Uploads are temporarily unavailable. Please try again.');
+    });
+    res.set('Cache-Control', 'no-store').json(json);
+  });
+
+  router.post('/register', async (req, res) => {
+    if (!ctx.storage.directUploads) throw new HttpError(404, ErrorCode.NOT_FOUND, 'Direct uploads are not enabled.');
+    const body = parseInput(
+      z.object({ files: z.array(z.object({ key: z.string().max(200), name: z.string().max(255) })).min(1).max(ctx.config.uploadMaxFiles) }),
+      req.body,
+    );
+    const result = await registerDirectUploads(ctx, requireOwner(req), body.files);
+    maybeRunCleanup(ctx);
+    res.status(result.uploaded.length > 0 ? 201 : 422).json(result);
   });
 
   router.get('/', async (req, res) => {

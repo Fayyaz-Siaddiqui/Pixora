@@ -2,13 +2,16 @@ import type { PrismaClient } from '@app/db';
 import type { PgBoss } from 'pg-boss';
 import type { Logger } from 'pino';
 import type { ImagingConfig } from '../config/env';
+import type { JobRunner } from '../queues/runner';
 import type { StorageDriver } from '../storage/storage';
 
 /** Everything the image services and worker need, created once per process. */
 export interface ImagingContext {
   prisma: PrismaClient;
   storage: StorageDriver;
-  boss: PgBoss;
+  /** Only in queue mode (long-running servers). */
+  boss: PgBoss | null;
+  runner: JobRunner;
   config: ImagingConfig;
   logger: Logger;
 }

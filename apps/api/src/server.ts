@@ -28,7 +28,7 @@ async function main(): Promise<void> {
     dbCheck: async () => {
       await prisma.$queryRaw`SELECT 1`;
     },
-    imaging: { ctx, cookieSecret: env.COOKIE_SECRET, secureCookies: env.NODE_ENV === 'production' },
+    imaging: { ctx, cookieSecret: env.COOKIE_SECRET, secureCookies: env.NODE_ENV === 'production', cronSecret: env.CRON_SECRET },
   });
 
   const server = app.listen(env.API_PORT, env.API_HOST, () => {

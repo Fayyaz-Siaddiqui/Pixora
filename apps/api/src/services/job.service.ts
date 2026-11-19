@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { HttpError } from '../lib/http-error';
 import { ownerWhere, type Owner } from '../middleware/identity';
 import { supportsTargetSize } from '../processors/encode';
-import { QUEUES, type ProcessImagePayload } from '../queues/queue';
 import { getOwnedAsset, type AssetWithStorage } from './asset.service';
 import type { ImagingContext } from './context';
 
@@ -58,10 +57,40 @@ async function enforceQuota(ctx: ImagingContext, owner: Owner, adding: number): 
   }
 }
 
-async function enqueue(ctx: ImagingContext, job: ProcessingJob): Promise<void> {
-  const payload: ProcessImagePayload = { jobId: job.id };
-  const queueJobId = await ctx.boss.send(QUEUES.processImage, payload, { priority: job.priority });
-  await ctx.prisma.processingJob.update({ where: { id: job.id }, data: { queueJobId } });
+function enqueue(ctx: ImagingContext, jobs: ProcessingJob[]): Promise<void> {
+  return ctx.runner.dispatch(jobs.map((j) => ({ id: j.id, priority: j.priority })));
+}
+
+/** A queued job that nobody picked up for this long is dispatched again (inline mode). */
+const STALL_AFTER_MS = 20_000;
+
+/**
+ * Inline mode has no worker to recover from a crashed or timed-out function,
+ * so status polls re-dispatch jobs that look stuck. The atomic claim in the
+ * job processor guarantees a job never runs twice at the same time.
+ */
+export async function kickStalledJobs(ctx: ImagingContext, jobs: Pick<ProcessingJob, 'id' | 'priority' | 'status' | 'createdAt' | 'startedAt' | 'updatedAt'>[]): Promise<void> {
+  if (ctx.runner.mode !== 'inline') return;
+  const now = Date.now();
+  const processingTimeoutMs = (ctx.config.jobTimeoutSeconds + 30) * 1000;
+  const stalled = jobs.filter(
+    (j) =>
+      (j.status === 'QUEUED' && now - j.updatedAt.getTime() > STALL_AFTER_MS) ||
+      (j.status === 'PROCESSING' && j.startedAt !== null && now - j.startedAt.getTime() > processingTimeoutMs),
+  );
+  // Claim the right to re-dispatch (touching updatedAt) so concurrent polls don't all kick the same job.
+  const kicked: ProcessingJob[] = [];
+  for (const j of stalled) {
+    const { count } = await ctx.prisma.processingJob.updateMany({
+      where: { id: j.id, status: j.status, updatedAt: j.updatedAt },
+      data: { queueJobId: `inline-retry-${now}` },
+    });
+    if (count === 1) kicked.push(j as ProcessingJob);
+  }
+  if (kicked.length > 0) {
+    ctx.logger.warn({ jobs: kicked.map((j) => j.id) }, 're-dispatching stalled jobs');
+    await enqueue(ctx, kicked);
+  }
 }
 
 const jobInclude = { inputAsset: true, result: { include: { outputAsset: true } } } as const;
@@ -86,7 +115,7 @@ export async function createJob(
       params: params as object,
     },
   });
-  await enqueue(ctx, job);
+  await enqueue(ctx, [job]);
   return ctx.prisma.processingJob.findUniqueOrThrow({ where: { id: job.id }, include: jobInclude });
 }
 
@@ -115,6 +144,7 @@ export async function createBatch(
     },
   });
 
+  const queued: ProcessingJob[] = [];
   for (const asset of assets) {
     // Per-image validation: one unsuitable image fails on its own instead of blocking the batch.
     let output: OutputOptions | null = null;
@@ -136,9 +166,10 @@ export async function createBatch(
         ...(error ? { status: 'FAILED' as const, errorCode: error.code, errorMessage: error.message, finishedAt: new Date() } : {}),
       },
     });
-    if (!error) await enqueue(ctx, job);
+    if (!error) queued.push(job);
   }
   await refreshBatchStatus(ctx, batch.id);
+  await enqueue(ctx, queued);
   return getOwnedBatch(ctx, owner, batch.id);
 }
 
@@ -187,7 +218,7 @@ export async function retryJob(ctx: ImagingContext, owner: Owner, id: string) {
     where: { id: job.id },
     data: { status: 'QUEUED', progress: 0, errorCode: null, errorMessage: null, startedAt: null, finishedAt: null },
   });
-  await enqueue(ctx, updated);
+  await enqueue(ctx, [updated]);
   if (job.batchId) await refreshBatchStatus(ctx, job.batchId);
   return getOwnedJob(ctx, owner, id);
 }

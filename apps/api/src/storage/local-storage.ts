@@ -10,6 +10,7 @@ const KEY_PATTERN = /^[a-z0-9][a-z0-9/_.-]{0,250}$/i;
 export class LocalStorage implements StorageDriver {
   readonly provider = 'LOCAL' as const;
   readonly bucket = 'local';
+  readonly directUploads = false;
   readonly tempDir: string;
   private readonly objectsDir: string;
 

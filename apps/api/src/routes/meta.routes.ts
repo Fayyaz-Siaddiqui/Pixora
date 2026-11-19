@@ -26,7 +26,7 @@ export function metaRoutes(ctx: ImagingContext): Router {
       outputFormats: OUTPUT_FORMATS.filter((f) => vipsFormats[f === 'avif' ? 'heif' : f]?.output.buffer).map((f) => FORMATS[f]),
       resampling: ['lanczos3', 'mitchell', 'cubic', 'nearest'],
       sizePresets: SIZE_PRESETS,
-      features: { aiUpscale: false },
+      features: { aiUpscale: false, directUploads: ctx.storage.directUploads },
     });
   });
 

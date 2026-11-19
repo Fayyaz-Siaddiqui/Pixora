@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireOwner } from '../middleware/identity';
 import { getOwnedAsset, streamZip } from '../services/asset.service';
 import type { ImagingContext } from '../services/context';
-import { cancelJob, getOwnedBatch, getOwnedJob, listOwnedJobs, retryJob } from '../services/job.service';
+import { cancelJob, getOwnedBatch, getOwnedJob, kickStalledJobs, listOwnedJobs, retryJob } from '../services/job.service';
 import { serializeBatch, serializeJob } from '../services/serializers';
 
 export function jobRoutes(ctx: ImagingContext): Router {
@@ -16,6 +16,7 @@ export function jobRoutes(ctx: ImagingContext): Router {
   /** Poll this for status and progress (0-100). */
   router.get('/:id', async (req, res) => {
     const job = await getOwnedJob(ctx, requireOwner(req), req.params.id);
+    await kickStalledJobs(ctx, [job]);
     res.set('Cache-Control', 'no-store').json({ job: serializeJob(job) });
   });
 
@@ -37,6 +38,7 @@ export function batchRoutes(ctx: ImagingContext): Router {
 
   router.get('/:id', async (req, res) => {
     const { batch, jobs } = await getOwnedBatch(ctx, requireOwner(req), req.params.id);
+    await kickStalledJobs(ctx, jobs);
     res.set('Cache-Control', 'no-store').json({ batch: serializeBatch(batch, jobs) });
   });
 
