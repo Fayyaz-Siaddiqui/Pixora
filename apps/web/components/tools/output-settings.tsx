@@ -61,7 +61,13 @@ export function OutputSettings({
           value={value.format ?? 'keep'}
           onChange={(f) => set({ format: f === 'keep' ? undefined : f })}
           options={allowKeep ? FORMAT_OPTIONS : FORMAT_OPTIONS.filter((o) => o.value !== 'keep')}
-          hint={value.format === 'avif' ? 'AVIF gives the smallest files; encoding is slower.' : undefined}
+          hint={
+            value.format === 'avif'
+              ? 'Smallest files, for websites. Many Windows apps can’t open AVIF; choose JPG or PNG to open it anywhere.'
+              : value.format === 'webp'
+                ? 'Small files, for websites. Some Windows apps can’t open WebP; choose JPG or PNG to open it anywhere.'
+                : undefined
+          }
         />
       )}
 
